@@ -1,3 +1,4 @@
+import { sha256Hex } from "@/server/lib/audit/ids";
 import { ReportRepository } from "@/server/features/reports/repositories/ReportRepository";
 import { sharesEnabled } from "@/server/features/reports/shareAccess";
 import { AppError } from "@/server/lib/errors";
@@ -232,21 +233,25 @@ async function deleteReport(
   if (!deleted) throw notFound(reportId);
 }
 
+async function getShareReview(projectId: string, reportId: string) {
+  const { report, html } = await getReportWithHtml(projectId, reportId);
+  const contentHash = await sha256Hex(
+    JSON.stringify([report.title, report.summary, html]),
+  );
+  return { report, html, contentHash };
+}
+
 type ShareParams = {
   source?: "app" | "mcp";
+  review?: { revision: number; contentHash: string };
   projectId: string;
   reportId: string;
-  /** From the authenticated context — the telemetry identity, nothing else. */
+  /** From the authenticated context — the approving/revoking identity. */
   userId: string;
   organizationId: string;
 };
 
-/**
- * Mints the public link, or returns the existing one. Idempotent on purpose:
- * the modal's toggle can be flipped twice by a double click or a retried
- * mutation, and a second mint would silently break the link the user just
- * copied.
- */
+/** Publish only the exact reviewed revision, using an atomic repository guard. */
 async function shareReport(params: ShareParams): Promise<ReportMetadata> {
   // Refused here rather than only hidden in the UI: the server is the trust
   // boundary. A token minted on a self-hosted deployment is a link that
@@ -258,7 +263,25 @@ async function shareReport(params: ShareParams): Promise<ReportMetadata> {
     );
   }
 
-  const report = await getReport(params.projectId, params.reportId);
+  if (params.source !== "app" || !params.review) {
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "Review and approve this version in the report sharing dialog. Agents cannot enable public sharing.",
+    );
+  }
+  const { report, contentHash } = await getShareReview(
+    params.projectId,
+    params.reportId,
+  );
+  if (
+    params.review.revision !== report.revision ||
+    params.review.contentHash !== contentHash
+  ) {
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "The report changed or sharing was revoked. Reload the review before approving.",
+    );
+  }
   if (report.shareToken) return report;
 
   const shareToken = mintShareToken();
@@ -266,11 +289,20 @@ async function shareReport(params: ShareParams): Promise<ReportMetadata> {
   const created = await ReportRepository.setShareToken(
     params.projectId,
     params.reportId,
-    { shareToken, sharedAt },
+    {
+      shareToken,
+      sharedAt,
+      revision: report.revision,
+      approvedContentHash: contentHash,
+      approvedByUserId: params.userId,
+    },
   );
-  // Another publisher may have won after our read. Return its stored token,
-  // and emit the shared event only for the request that created it.
-  if (!created) return getReport(params.projectId, params.reportId);
+  // A save, revocation or other publisher won after the read: require a fresh review.
+  if (!created)
+    throw new AppError(
+      "VALIDATION_ERROR",
+      "Sharing state changed. Reload the review before approving.",
+    );
   await captureServerEvent({
     distinctId: params.userId,
     event: "report:shared",
@@ -282,13 +314,18 @@ async function shareReport(params: ShareParams): Promise<ReportMetadata> {
       source: params.source ?? "app",
     },
   });
-  return { ...report, shareToken, sharedAt };
+  return {
+    ...report,
+    shareToken,
+    sharedAt,
+    approvedContentHash: contentHash,
+    approvedByUserId: params.userId,
+  };
 }
 
-/** Revokes the link by nulling the token. A second call is a no-op. */
+/** Revoke the link and invalidate outstanding reviews, including private reports. */
 async function unshareReport(params: ShareParams): Promise<ReportMetadata> {
   const report = await getReport(params.projectId, params.reportId);
-  if (!report.shareToken) return report;
 
   await ReportRepository.setShareToken(params.projectId, params.reportId, null);
   await captureServerEvent({
@@ -302,7 +339,14 @@ async function unshareReport(params: ShareParams): Promise<ReportMetadata> {
       source: params.source ?? "app",
     },
   });
-  return { ...report, shareToken: null, sharedAt: null };
+  return {
+    ...report,
+    shareToken: null,
+    sharedAt: null,
+    revision: report.revision + 1,
+    approvedContentHash: null,
+    approvedByUserId: null,
+  };
 }
 
 // Shared by the reads and the delete, where `reportId` is a required argument —
@@ -322,5 +366,6 @@ export const ReportService = {
   getReportWithHtml,
   deleteReport,
   shareReport,
+  getShareReview,
   unshareReport,
 } as const;

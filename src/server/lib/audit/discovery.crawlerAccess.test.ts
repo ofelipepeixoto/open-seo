@@ -25,6 +25,19 @@ describe("discoverUrls crawler access", () => {
 
   it("drops the signature when robots.txt redirects to another host", async () => {
     vi.mocked(fetch).mockImplementation((input) => {
+      if (
+        String(input instanceof Request ? input.url : input).includes(
+          "dns-query",
+        )
+      )
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              Status: 0,
+              Answer: [{ type: 1, data: "93.184.216.34" }],
+            }),
+          ),
+        );
       if (input === "https://store.example.com/robots.txt") {
         return Promise.resolve(
           new Response(null, {

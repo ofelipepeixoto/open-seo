@@ -20,11 +20,18 @@ describe("discoverUrls", () => {
       "fetch",
       vi.fn((url: string) =>
         Promise.resolve(
-          url.endsWith("/robots.txt")
-            ? new Response("User-agent: *\nAllow: /")
-            : new Response(sitemapXml([...posts, "https://example.com/"]), {
-                headers: { "content-type": "application/xml" },
-              }),
+          url.includes("dns-query")
+            ? new Response(
+                JSON.stringify({
+                  Status: 0,
+                  Answer: [{ type: 1, data: "93.184.216.34" }],
+                }),
+              )
+            : url.endsWith("/robots.txt")
+              ? new Response("User-agent: *\nAllow: /")
+              : new Response(sitemapXml([...posts, "https://example.com/"]), {
+                  headers: { "content-type": "application/xml" },
+                }),
         ),
       ),
     );

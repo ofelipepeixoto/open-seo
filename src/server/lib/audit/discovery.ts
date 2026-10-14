@@ -1,10 +1,11 @@
 /**
  * robots.txt and sitemap.xml discovery for the site audit crawler.
  */
+import { readTextUpTo } from "./html-response";
 import robotsParser from "robots-parser";
 import { XMLParser } from "fast-xml-parser";
 import { isSameOrigin, normalizeUrl } from "./url-utils";
-import { isCrawlableUrl } from "./url-policy";
+import { isCrawlableUrl, normalizeAndValidateStartUrl } from "./url-policy";
 import { crawlerHeadersFor, type CrawlerAccess } from "@/shared/crawler-access";
 
 const SITEMAP_FETCH_TIMEOUT_MS = 15_000;
@@ -50,7 +51,7 @@ async function fetchRobotsTxtText(
       access,
     );
     if (!fetched?.response.ok) return null;
-    return (await fetched.response.text()).slice(0, MAX_ROBOTS_TXT_BYTES);
+    return await readTextUpTo(fetched.response, MAX_ROBOTS_TXT_BYTES);
   } catch (error) {
     console.warn("Failed to fetch robots.txt:", error);
     return null;
@@ -73,6 +74,7 @@ async function fetchFollowingRedirects(
   const deadline = Date.now() + timeoutMs;
   let current = url;
   for (let hop = 0; hop <= MAX_DISCOVERY_REDIRECT_HOPS; hop++) {
+    current = await normalizeAndValidateStartUrl(current);
     const response = await fetch(current, {
       headers: {
         "User-Agent": "OpenSEO-Audit/1.0",

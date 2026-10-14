@@ -4,12 +4,15 @@ import { formatCount } from "@/shared/format";
 import {
   REPORT_MAX_BYTES_PER_ORG,
   REPORT_MAX_PER_PROJECT,
+  type ReportMetadata,
 } from "@/types/schemas/reports";
 import { ReportService } from "./ReportService";
 
 const mocks = vi.hoisted(() => ({
   listReports: vi.fn(),
-  getReport: vi.fn(),
+  getReport:
+    vi.fn<(...args: string[]) => Promise<typeof storedReport | null>>(),
+  getReportWithHtml: vi.fn(),
   findReportByTitle: vi.fn(),
   countReports: vi.fn(),
   sumReportBytesForOrganization: vi.fn(),
@@ -43,17 +46,21 @@ const save = (
     ...overrides,
   });
 
-const storedReport = {
+const storedReport: ReportMetadata = {
   id: "report_1",
   projectId: "project_1",
   title: "badseo.dev SEO audit, Sep 2026",
   summary: "One clear verdict.",
   skill: "seo-audit",
+  templateId: null,
   createdBy: "Codex",
   createdByUserId: "user_original",
   sizeBytes: 42,
   shareToken: null,
   sharedAt: null,
+  revision: 1,
+  approvedContentHash: null,
+  approvedByUserId: null,
   createdAt: "2026-09-01T10:00:00.000Z",
   updatedAt: "2026-09-01T10:00:00.000Z",
 };
@@ -86,6 +93,7 @@ describe("saveReport", () => {
       summary: "One clear verdict.",
       html,
       skill: "seo-audit",
+      templateId: null,
       sizeBytes: html.length,
     });
   });
@@ -200,8 +208,15 @@ describe("deleteReport", () => {
 });
 
 describe("sharing", () => {
-  const share = () =>
+  const share = async () =>
     ReportService.shareReport({
+      source: "app",
+      review: {
+        revision: 1,
+        contentHash: (
+          await ReportService.getShareReview("project_1", "report_1")
+        ).contentHash,
+      },
       projectId: "project_1",
       reportId: "report_1",
       userId: "user_1",
@@ -210,6 +225,10 @@ describe("sharing", () => {
 
   beforeEach(() => {
     mocks.setShareToken.mockResolvedValue(true);
+    mocks.getReportWithHtml.mockImplementation(async () => ({
+      ...(await mocks.getReport()),
+      html,
+    }));
     vi.mocked(isHostedServerAuthMode).mockResolvedValue(true);
     mocks.getReport.mockResolvedValue(storedReport);
   });
@@ -221,12 +240,18 @@ describe("sharing", () => {
     expect(mocks.setShareToken).toHaveBeenCalledWith("project_1", "report_1", {
       shareToken: first.shareToken,
       sharedAt: first.sharedAt,
+      revision: 1,
+      approvedContentHash: first.approvedContentHash,
+      approvedByUserId: "user_1",
     });
 
     mocks.getReport.mockResolvedValue({
       ...storedReport,
       shareToken: first.shareToken,
       sharedAt: first.sharedAt,
+      revision: 1,
+      approvedContentHash: first.approvedContentHash,
+      approvedByUserId: "user_1",
     });
     await expect(
       ReportService.unshareReport({
@@ -271,6 +296,5 @@ describe("sharing", () => {
       "Sharing is only available on hosted OpenSEO.",
     );
     expect(mocks.setShareToken).not.toHaveBeenCalled();
-    expect(mocks.getReport).not.toHaveBeenCalled();
   });
 });

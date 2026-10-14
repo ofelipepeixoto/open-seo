@@ -1,3 +1,4 @@
+import { requirePaidProviderBudget } from "@/server/billing/paid-provider-policy";
 import {
   createOpenRouter,
   type LanguageModelV3,
@@ -65,7 +66,13 @@ export function buildChatAgentModel(
   reasoningEffort: "max" | "low" = "max",
 ): LanguageModelV3 {
   const model = modelId ?? DEFAULT_CHAT_AGENT_MODEL;
-  const openrouter = createOpenRouter({ apiKey });
+  const openrouter = createOpenRouter({
+    apiKey,
+    fetch: async (input, init) => {
+      await requirePaidProviderBudget();
+      return fetch(input, init);
+    },
+  });
   const primary = openRouterModel(openrouter, model, reasoningEffort);
   if (!model.startsWith("openai/")) return primary;
   // Where OpenRouter would reject OpenAI, pick MiniMax M3 before the request.

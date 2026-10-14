@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { readTextUpTo } from "./html-response";
 import { AppError } from "@/server/lib/errors";
 import { crawlerHeadersFor, type CrawlerAccess } from "@/shared/crawler-access";
 
@@ -50,7 +52,10 @@ function isPrivateIpv4(host: string): boolean {
   if (a === 0) return true;
   if (a === 169 && b === 254) return true;
   if (a === 172 && b >= 16 && b <= 31) return true;
-  if (a === 192 && b === 168) return true;
+  if (a === 192 && (b === 168 || b === 0)) return true;
+  if (a === 192 && b === 2) return true;
+  if (a === 198 && b === 51) return true;
+  if (a === 203 && b === 0) return true;
   if (a === 100 && b >= 64 && b <= 127) return true;
   if (a === 198 && (b === 18 || b === 19)) return true;
   if (a >= 224) return true;
@@ -92,6 +97,13 @@ function parseMappedIpv4FromIpv6(host: string): string | null {
 function isPrivateIpv6(host: string): boolean {
   const value = normalizeHost(host);
   if (value === "::1" || value === "::") return true;
+  if (
+    value.startsWith("ff") ||
+    value.startsWith("64:ff9b:") ||
+    value.startsWith("2002:") ||
+    value.startsWith("2001:db8:")
+  )
+    return true;
   if (value.startsWith("fc") || value.startsWith("fd")) return true;
   if (
     value.startsWith("fe8") ||
@@ -135,10 +147,14 @@ type DnsJsonAnswer = {
   data?: string;
 };
 
-type DnsJsonResponse = {
-  Status?: number;
-  Answer?: DnsJsonAnswer[];
-};
+const dnsJsonResponseSchema = z.object({
+  Status: z.number(),
+  Answer: z
+    .array(
+      z.object({ type: z.number().optional(), data: z.string().optional() }),
+    )
+    .optional(),
+});
 
 async function resolveAddressRecords(
   hostname: string,
@@ -152,16 +168,28 @@ async function resolveAddressRecords(
     },
   );
 
-  if (!response.ok) return [];
+  if (!response.ok) throw new Error("DNS resolution unavailable");
 
-  const body: DnsJsonResponse = await response.json();
-  if (body.Status !== 0 || !Array.isArray(body.Answer)) return [];
+  const body = dnsJsonResponseSchema.parse(
+    JSON.parse(await readTextUpTo(response, 64 * 1024)),
+  );
+  if (body.Status !== 0) throw new Error("DNS resolution failed");
+  if (!body.Answer) return [];
+  if (!Array.isArray(body.Answer)) throw new Error("Invalid DNS response");
 
   const expectedType = type === "A" ? 1 : 28;
   return body.Answer.filter(
     (answer): answer is Required<Pick<DnsJsonAnswer, "data" | "type">> =>
       answer.type === expectedType && typeof answer.data === "string",
-  ).map((answer) => normalizeHost(answer.data));
+  ).map((answer) => {
+    const data = answer.data.trim();
+    if (type === "A" && !/^\d+\.\d+\.\d+\.\d+$/.test(data))
+      throw new Error("Invalid IPv4 answer");
+    const parsed = new URL(
+      type === "AAAA" ? `http://[${data}]` : `http://${data}`,
+    );
+    return normalizeHost(parsed.hostname);
+  });
 }
 
 async function hostnameResolvesToBlockedAddress(
@@ -177,22 +205,24 @@ async function hostnameResolvesToBlockedAddress(
     ]);
 
     const addresses = [...v4, ...v6];
-    if (addresses.length === 0) return false;
+    if (addresses.length === 0) return true;
 
     return addresses.some(
-      (address) => isPrivateIpv4(address) || isPrivateIpv6(address),
+      (address) =>
+        !isIpLiteral(address) ||
+        isPrivateIpv4(address) ||
+        isPrivateIpv6(address),
     );
   } catch {
-    return false;
+    return true;
   }
 }
 
 /**
- * Synchronous SSRF check for URLs discovered mid-crawl (links, redirect
+ * Synchronous prefilter for URLs discovered mid-crawl (links, redirect
  * targets, sitemap entries). Blocks non-http(s) schemes, private/loopback IP
- * literals, and internal hostnames. DNS resolution is only performed for the
- * start URL (see normalizeAndValidateStartUrl); per-link DoH lookups would be
- * prohibitively slow.
+ * literals, and internal hostnames. Fetch entrypoints also resolve DNS before
+ * sending requests. DNS validation does not replace network-level egress controls.
  */
 export function isCrawlableUrl(url: string): boolean {
   let parsed: URL;
@@ -204,7 +234,9 @@ export function isCrawlableUrl(url: string): boolean {
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     return false;
   }
-  return !isBlockedHost(parsed.hostname);
+  return (
+    !parsed.username && !parsed.password && !isBlockedHost(parsed.hostname)
+  );
 }
 
 export async function normalizeAndValidateStartUrl(
@@ -228,7 +260,7 @@ export async function normalizeAndValidateStartUrl(
     throw new AppError("VALIDATION_ERROR");
   }
 
-  if (isBlockedHost(parsed.hostname)) {
+  if (parsed.username || parsed.password || isBlockedHost(parsed.hostname)) {
     throw new AppError("CRAWL_TARGET_BLOCKED");
   }
 

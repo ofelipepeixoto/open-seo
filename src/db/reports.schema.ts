@@ -52,8 +52,11 @@ export const reports = sqliteTable(
     // a user, and the raw endpoint has to look a row up by it.
     shareToken: text("share_token"),
     // When the current token was minted. Re-sharing mints a new token and a new
-    // stamp; content saves never touch either column.
+    // stamp; saving content revokes both columns and the approval.
     sharedAt: text("shared_at"),
+    revision: integer("revision").notNull().default(1),
+    approvedContentHash: text("approved_content_hash"),
+    approvedByUserId: text("approved_by_user_id"),
     // Timestamps are text on both dialects and stamped by the repository. The
     // default emits ISO (unlike current_timestamp's space format) because the
     // list order is lexicographic against app-written ISO stamps.

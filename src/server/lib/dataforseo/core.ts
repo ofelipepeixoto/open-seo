@@ -1,3 +1,4 @@
+import { requirePaidProviderBudget } from "@/server/billing/paid-provider-policy";
 import { AppError } from "@/server/lib/errors";
 import { getRequiredEnvValue } from "@/server/lib/runtime-env";
 import type { ErrorCode } from "@/shared/error-codes";
@@ -173,6 +174,7 @@ async function requestDataforseo<TTask extends DataforseoTaskLike>(
   body: unknown,
   options: DataforseoRequestOptions,
 ): Promise<DataforseoResponseLike<TTask> | null> {
+  await requirePaidProviderBudget();
   const doFetch = createAuthenticatedFetch(
     options.classify,
     options.maxServerErrorRetries,
@@ -218,11 +220,12 @@ export function dataforseoPost<
  * gates its multi-MB body reads behind a parse lock in the audit worker, and
  * passes its own `signal` so the timeout can be cleared once headers arrive.
  */
-export function dataforseoPostResponse(
+export async function dataforseoPostResponse(
   path: string,
   tasks: unknown[],
   options: DataforseoRequestOptions & { signal?: AbortSignal } = {},
 ): Promise<Response> {
+  await requirePaidProviderBudget();
   const doFetch = createAuthenticatedFetch(
     options.classify,
     options.maxServerErrorRetries,

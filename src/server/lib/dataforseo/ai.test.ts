@@ -2,6 +2,7 @@ import { expect, it, vi } from "vitest";
 import { fetchLlmResponse } from "@/server/lib/dataforseo/ai";
 
 vi.mock("@/server/lib/runtime-env", () => ({
+  isHostedServerAuthMode: async () => true,
   getRequiredEnvValue: vi.fn(async () => "test-api-key"),
 }));
 vi.mock("@/server/lib/dataforseo/llm-models", () => ({

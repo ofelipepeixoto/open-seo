@@ -1,3 +1,4 @@
+import { normalizeAndValidateStartUrl } from "@/server/lib/audit/url-policy";
 import { MAX_HTML_BYTES, readTextUpTo } from "@/server/lib/audit/html-response";
 import { classifyFetch } from "@/server/lib/audit/classify-fetch";
 import type { CrawledPageResult } from "@/server/lib/audit/types";
@@ -45,6 +46,7 @@ async function fetchPage(
     // /docs/) need no special handling: normalizeUrl preserves trailing
     // slashes, so /docs and /docs/ are distinct URLs and the redirect resolves
     // to its canonical target instead of cycling back to its own source.
+    await normalizeAndValidateStartUrl(url);
     const response = await fetch(url, {
       headers: {
         "User-Agent": CRAWL_USER_AGENT,
