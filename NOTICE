@@ -1,0 +1,5 @@
+OpenSEO is derived from https://github.com/every-app/open-seo.
+Upstream copyright: Copyright (c) 2026 Ben Senescu.
+The original MIT license is preserved in LICENSE.
+This fork adds revision-bound report review, defensive fetching and spending admission controls.
+These changes do not imply endorsement by the upstream authors.

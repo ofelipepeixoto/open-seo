@@ -65,6 +65,9 @@ const storedReport = (
   sizeBytes: 15_517,
   shareToken: null,
   sharedAt: null,
+  revision: 1,
+  approvedContentHash: null,
+  approvedByUserId: null,
   createdAt: "2026-09-01T10:00:00.000Z",
   updatedAt: "2026-09-01T10:00:00.000Z",
   ...overrides,
@@ -210,98 +213,26 @@ describe("get_report", () => {
 });
 
 describe("public report sharing", () => {
-  it("publishes, retrieves, preserves on save, and revokes", async () => {
-    let stored = storedReport();
-    mocks.getReport.mockImplementation(async () => stored);
-    mocks.getReportWithHtml.mockImplementation(async () => ({
-      ...stored,
-      html,
-    }));
-    mocks.setShareToken.mockImplementation(
-      async (
-        _project: string,
-        _report: string,
-        share: { shareToken: string; sharedAt: string } | null,
-      ) => {
-        stored = { ...stored, shareToken: null, sharedAt: null, ...share };
-        return true;
-      },
+  it("refuses agent publication and permits revocation", async () => {
+    mocks.getReport.mockResolvedValue(
+      storedReport({ shareToken: "a".repeat(32) }),
     );
-    const setSharing = (isPublic: boolean) =>
+    await expect(
       setReportSharingTool.handler(
-        { projectId, reportId, public: isPublic },
+        { projectId, reportId, public: true },
         toolContext,
-      );
-
-    const published = await setSharing(true);
-    const shareUrl = published.structuredContent.shareUrl;
-    expect(shareUrl).toMatch(
-      /^https:\/\/open-seo\.test\/s\/[A-Za-z0-9_-]{32}$/,
-    );
-    expect(textContent(published)).toContain(shareUrl!);
-    expect(mocks.captureServerEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "report:shared",
-        distinctId: "user_123",
-        organizationId: "org_123",
-        properties: {
-          project_id: projectId,
-          report_id: reportId,
-          skill: "seo-audit",
-          source: "mcp",
-        },
-      }),
-    );
-
-    for (const includeHtml of [false, true]) {
-      const fetched = await getReportTool.handler(
-        { projectId, reportId, includeHtml },
-        toolContext,
-      );
-      expect(fetched.structuredContent.report.shareUrl).toBe(shareUrl);
-      expect(fetched.structuredContent.report).not.toHaveProperty("shareToken");
-      expect(textContent(fetched)).toContain(shareUrl!);
-    }
-    await saveReportTool.handler(
-      {
-        projectId,
-        reportId,
-        title: stored.title,
-        summary: stored.summary,
-        html,
-      },
+      ),
+    ).rejects.toThrow("Agents cannot");
+    expect(mocks.setShareToken).not.toHaveBeenCalled();
+    const revoked = await setReportSharingTool.handler(
+      { projectId, reportId, public: false },
       toolContext,
     );
-    expect(mocks.setShareToken).toHaveBeenCalledTimes(1);
-    expect(mocks.updateReportContent.mock.calls[0][0]).not.toHaveProperty(
-      "shareToken",
-    );
-
-    const revoked = await setSharing(false);
     expect(revoked.structuredContent).toMatchObject({
       public: false,
       shareUrl: null,
     });
-    expect(mocks.setShareToken).toHaveBeenLastCalledWith(
-      projectId,
-      reportId,
-      null,
-    );
-    expect(mocks.captureServerEvent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        event: "report:unshared",
-        properties: {
-          project_id: projectId,
-          report_id: reportId,
-          skill: "seo-audit",
-          source: "mcp",
-        },
-      }),
-    );
-    expect(
-      (await getReportTool.handler({ projectId, reportId }, toolContext))
-        .structuredContent.report.shareUrl,
-    ).toBeNull();
+    expect(mocks.setShareToken).toHaveBeenCalledWith(projectId, reportId, null);
   });
 
   it("does not expose public links in bulk lists or mint links on reads", async () => {
@@ -351,7 +282,7 @@ describe("public report sharing", () => {
     mocks.getReport.mockResolvedValue(null);
     await expect(
       setReportSharingTool.handler(
-        { projectId, reportId: "foreign_report", public: true },
+        { projectId, reportId: "foreign_report", public: false },
         toolContext,
       ),
     ).rejects.toThrow("No report foreign_report in this project.");

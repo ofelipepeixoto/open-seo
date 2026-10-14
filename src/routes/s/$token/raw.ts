@@ -21,13 +21,8 @@ import { sharePath } from "@/shared/report-share";
 // kill switch off. A revoked link must not confirm that it once worked.
 const NOT_SHARED_BODY = "This report isn't shared.";
 
-/**
- * How long a colo may keep the document. A revoked link keeps loading for up
- * to this long from an edge that already has it, which is what the share modal
- * tells the user. ETags are deliberately out of scope: a revalidation answered
- * before the token lookup would make revocation advisory.
- */
-const EDGE_CACHE_CONTROL = "public, max-age=0, s-maxage=60";
+// Never cache capability-authorized documents: each read checks current approval.
+const EDGE_CACHE_CONTROL = "no-store";
 
 /** Every redirect this endpoint answers: never stored, by anyone. */
 const bounceTo = (location: string) =>
@@ -80,17 +75,13 @@ async function handleSharedReportRequest(
   // otherwise be bounced to a page whose frame it cannot load either, so an
   // absent header is served the document.
   //
-  // The 200 is the only cacheable answer here, so the response never needs to
+  // All responses are no-store, so the response never needs to
   // vary on Sec-Fetch-Dest: the redirect path is a 302, served `no-store`, and
-  // a shared cache stores neither it nor the 404.
+  // a shared cache stores no response from this endpoint.
   const dest = request.headers.get("Sec-Fetch-Dest");
   if (dest !== null && dest !== "iframe") return bounceTo(sharePath(token));
 
-  const html = await ReportRepository.getReportHtml(
-    report.projectId,
-    report.id,
-  );
-  if (html === null) return notShared();
+  const html = report.html;
 
   waitUntil(
     (async () => {

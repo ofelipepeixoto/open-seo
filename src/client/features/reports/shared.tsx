@@ -1,6 +1,6 @@
 import { formatRelativeTime } from "@/client/lib/relative-time";
-import { useId } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Copy, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { ConfirmDialog } from "@/client/components/ConfirmDialog";
@@ -12,19 +12,14 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/client/components/ui/dialog";
-import {
-  Field,
-  FieldContent,
-  FieldDescription,
-  FieldLabel,
-} from "@/client/components/ui/field";
 import { Input } from "@/client/components/ui/input";
-import { Switch } from "@/client/components/ui/switch";
+import { REPORT_CSP } from "@/shared/report-sandbox";
 import { getStandardErrorMessage } from "@/client/lib/error-messages";
 import { captureClientEvent } from "@/client/lib/posthog";
 import {
   deleteReport,
   shareReport,
+  getShareReview,
   unshareReport,
   type ReportListItem,
 } from "@/serverFunctions/reports";
@@ -108,7 +103,7 @@ export function DeleteReportModal({
 }
 
 /**
- * The share toggle. The link is built from the browser's own origin, so the
+ * Version review and public-link approval. The link is built from the browser's own origin, so the
  * same report shares correctly from app.openseo.so and from a self-hosted
  * hostname without the server knowing either.
  */
@@ -118,13 +113,30 @@ export function ShareReportModal({
 }: {
   report: Pick<
     ReportListItem,
-    "id" | "projectId" | "title" | "shareToken" | "sharedAt"
+    | "id"
+    | "projectId"
+    | "title"
+    | "shareToken"
+    | "sharedAt"
+    | "revision"
+    | "approvedContentHash"
   >;
   onClose: () => void;
 }) {
   const queryClient = useQueryClient();
-  const switchId = useId();
+  const [confirmedVersion, setConfirmedVersion] = useState<string | null>(null);
   const { projectId, id: reportId } = report;
+  const review = useQuery({
+    queryKey: ["report-share-review", projectId, reportId, report.revision],
+    queryFn: () => getShareReview({ data: { projectId, reportId } }),
+    staleTime: 0,
+    refetchOnWindowFocus: false,
+  });
+  const reviewVersion = review.data
+    ? `${review.data.report.revision}:${review.data.contentHash}`
+    : null;
+  const confirmed =
+    reviewVersion !== null && confirmedVersion === reviewVersion;
   // Share and unshare in one mutation, keyed by the state the toggle is moving
   // to. The response is written straight into the report query so the modal
   // shows the new link without waiting for a refetch; the list is invalidated
@@ -133,9 +145,27 @@ export function ShareReportModal({
     meta: { errorToast: false },
     mutationFn: (shared: boolean) =>
       shared
-        ? shareReport({ data: { projectId, reportId } })
+        ? shareReport({
+            data: {
+              projectId,
+              reportId,
+              revision: review.data!.report.revision,
+              contentHash: review.data!.contentHash,
+            },
+          })
         : unshareReport({ data: { projectId, reportId } }),
+    onError: () => {
+      setConfirmedVersion(null);
+      void queryClient.invalidateQueries({
+        queryKey: reportQueryKey(projectId, reportId),
+      });
+      void queryClient.invalidateQueries({
+        queryKey: reportsQueryKey(projectId),
+      });
+    },
     onSuccess: (result) => {
+      setConfirmedVersion(null);
+      void review.refetch();
       // No client event here: the service already captures report:shared and
       // report:unshared server-side, and a second one would double the count.
       queryClient.setQueryData(
@@ -148,8 +178,6 @@ export function ShareReportModal({
       });
     },
   });
-  // The toggle follows the click while the mutation is in flight — a round
-  // trip that leaves the switch sitting in its old position reads as broken.
   const shared = Boolean(report.shareToken);
   const url = report.shareToken
     ? `${window.location.origin}${sharePath(report.shareToken)}`
@@ -180,23 +208,98 @@ export function ShareReportModal({
         </DialogHeader>
 
         <div className="rounded-lg border border-border">
-          <Field orientation="horizontal" className="p-4">
-            <FieldContent>
-              <FieldLabel htmlFor={switchId}>Public link</FieldLabel>
-              <FieldDescription id={`${switchId}-description`}>
-                {shared
-                  ? "Anyone with the link can view. No sign-in needed."
-                  : "Only members of your organization can open it. A link that was open can keep loading for up to a minute."}
-              </FieldDescription>
-            </FieldContent>
-            <Switch
-              id={switchId}
-              aria-describedby={`${switchId}-description`}
-              checked={mutation.isPending ? mutation.variables : shared}
-              disabled={mutation.isPending}
-              onCheckedChange={(checked) => mutation.mutate(checked)}
-            />
-          </Field>
+          <div className="space-y-3 p-4">
+            <p className="font-medium">
+              {shared ? "Shared approved version" : "Private · awaiting review"}
+            </p>
+            <p className="text-sm text-muted-foreground">
+              Anyone with the public link can read this report without signing
+              in. Every save revokes the link and requires a new review.
+              Revocation cannot remove copies already downloaded.
+            </p>
+            {shared ? (
+              <>
+                <p className="break-all text-xs">
+                  Approved revision {report.revision} · SHA-256{" "}
+                  {report.approvedContentHash}
+                </p>
+                <Button
+                  variant="outline"
+                  disabled={mutation.isPending}
+                  onClick={() => mutation.mutate(false)}
+                >
+                  {mutation.isPending ? "Revoking…" : "Revoke public link"}
+                </Button>
+              </>
+            ) : review.isPending ? (
+              <p role="status">Loading version for review…</p>
+            ) : review.isError ? (
+              <div role="alert">
+                <p>Could not load the review. Sharing remains disabled.</p>
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setConfirmedVersion(null);
+                    void review.refetch();
+                  }}
+                >
+                  Reload review
+                </Button>
+              </div>
+            ) : review.data ? (
+              <>
+                <p className="font-medium">{review.data.report.title}</p>
+                <p className="text-sm whitespace-pre-wrap">
+                  {review.data.report.summary}
+                </p>
+                <p className="break-all text-xs">
+                  Revision {review.data.report.revision} · SHA-256{" "}
+                  {review.data.contentHash}
+                </p>
+                <iframe
+                  title="Exact report version for approval"
+                  sandbox=""
+                  referrerPolicy="no-referrer"
+                  className="h-80 w-full border"
+                  srcDoc={`<meta http-equiv="Content-Security-Policy" content="${REPORT_CSP}">${review.data.html}`}
+                />
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={confirmed}
+                    disabled={mutation.isPending}
+                    onChange={(event) =>
+                      setConfirmedVersion(
+                        event.target.checked ? reviewVersion : null,
+                      )
+                    }
+                  />
+                  I reviewed the text, facts, sources and publication rights for
+                  this version and approve a public link.
+                </label>
+                <Button
+                  disabled={
+                    !confirmed || mutation.isPending || review.isFetching
+                  }
+                  onClick={() => mutation.mutate(true)}
+                >
+                  {mutation.isPending
+                    ? "Confirming…"
+                    : "Approve this version and create public link"}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={mutation.isPending}
+                  onClick={() => {
+                    setConfirmedVersion(null);
+                    void review.refetch();
+                  }}
+                >
+                  Reload review
+                </Button>
+              </>
+            ) : null}
+          </div>
 
           {shared ? (
             <div className="space-y-3 border-t border-border p-4">
@@ -228,7 +331,8 @@ export function ShareReportModal({
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                Shows the latest saved version. Hidden from search engines.
+                Shows only this approved revision. Saving revokes the link.
+                Hidden from search engines.
                 {report.sharedAt
                   ? ` Link created ${formatRelativeTime(report.sharedAt)}.`
                   : ""}
@@ -238,12 +342,12 @@ export function ShareReportModal({
         </div>
 
         {/* Shown in place rather than as a toast: the message belongs next to
-            the toggle that would not move. */}
+            the action that failed. */}
         {mutation.isError ? (
-          <p className="text-sm text-destructive">
+          <p role="alert" className="text-sm text-destructive">
             {getStandardErrorMessage(
               mutation.error,
-              "Failed to update sharing",
+              "Sharing status is uncertain. Reload the review and check the current state before trying again.",
             )}
           </p>
         ) : null}

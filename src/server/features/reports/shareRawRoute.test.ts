@@ -58,6 +58,7 @@ const SHARED_REPORT = {
   skill: "seo-audit",
   updatedAt: "2026-09-01T10:00:00.000Z",
   archived: false,
+  html: HTML,
 };
 
 beforeEach(() => {
@@ -79,7 +80,7 @@ describe("handleSharedReportRequest", () => {
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
       "x-robots-tag": "noindex, nofollow",
-      "cache-control": "public, max-age=0, s-maxage=60",
+      "cache-control": "no-store",
     });
   });
 

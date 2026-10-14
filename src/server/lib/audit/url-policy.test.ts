@@ -15,11 +15,18 @@ describe("normalizeAndValidateStartUrl", () => {
   });
 
   it("adds https when protocol is missing and strips hash", async () => {
-    vi.mocked(fetch).mockResolvedValue(
-      new Response(JSON.stringify({ Status: 0, Answer: [] }), {
-        status: 200,
-        headers: { "content-type": "application/dns-json" },
-      }),
+    vi.mocked(fetch).mockImplementation(
+      async () =>
+        new Response(
+          JSON.stringify({
+            Status: 0,
+            Answer: [{ type: 1, data: "93.184.216.34" }],
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "application/dns-json" },
+          },
+        ),
     );
 
     await expect(
@@ -38,10 +45,13 @@ describe("normalizeAndValidateStartUrl", () => {
 });
 
 const dnsOk = () =>
-  new Response(JSON.stringify({ Status: 0, Answer: [] }), {
-    status: 200,
-    headers: { "content-type": "application/dns-json" },
-  });
+  new Response(
+    JSON.stringify({ Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] }),
+    {
+      status: 200,
+      headers: { "content-type": "application/dns-json" },
+    },
+  );
 const redirect = (location: string) =>
   new Response(null, { status: 301, headers: { location } });
 
@@ -100,5 +110,42 @@ describe("resolveStartUrlRedirects", () => {
     ).rejects.toMatchObject({
       code: "CRAWL_TARGET_BLOCKED",
     } satisfies Partial<AppError>);
+  });
+});
+
+describe("fail-closed DNS admission", () => {
+  beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
+  afterEach(() => vi.unstubAllGlobals());
+  it.each([
+    { Status: 2 },
+    { Status: 0, Answer: [] },
+    {
+      Status: 0,
+      Answer: [
+        { type: 1, data: "93.184.216.34" },
+        { type: 28, data: "fd00::1" },
+      ],
+    },
+  ])("refuses unresolved or mixed private results: %j", async (body) => {
+    vi.mocked(fetch).mockImplementation(async () => Response.json(body));
+    await expect(
+      normalizeAndValidateStartUrl("https://example.com"),
+    ).rejects.toMatchObject({ code: "CRAWL_TARGET_BLOCKED" });
+  });
+  it("refuses resolver transport failure", async () => {
+    vi.mocked(fetch).mockRejectedValue(new Error("timeout"));
+    await expect(
+      normalizeAndValidateStartUrl("https://example.com"),
+    ).rejects.toMatchObject({ code: "CRAWL_TARGET_BLOCKED" });
+  });
+  it.each([
+    "https://user:secret@example.com",
+    "http://[ff02::1]",
+    "http://[64:ff9b::a00:1]",
+  ])("refuses %s before resolving", async (url) => {
+    await expect(normalizeAndValidateStartUrl(url)).rejects.toMatchObject({
+      code: "CRAWL_TARGET_BLOCKED",
+    });
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

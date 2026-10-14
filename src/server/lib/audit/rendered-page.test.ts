@@ -1,7 +1,16 @@
+import type * as UrlPolicyModule from "./url-policy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { RenderedPageService } from "./rendered-page";
 import { MAX_HTML_BYTES } from "./html-response";
 import { isAuditRenderingAllowed } from "./rendering-policy";
+
+vi.mock("@/server/billing/paid-provider-policy", () => ({
+  requirePaidProviderBudget: async () => {},
+}));
+vi.mock("./url-policy", async (importOriginal) => ({
+  ...(await importOriginal<typeof UrlPolicyModule>()),
+  normalizeAndValidateStartUrl: async (url: string) => url,
+}));
 
 const url = "https://example.com/page";
 const html =
@@ -227,16 +236,16 @@ describe("rendered page providers", () => {
 describe("rendering availability", () => {
   afterEach(() => vi.unstubAllEnvs());
 
-  it("exists when a browser is bound or a Context key is set, whatever the auth mode", async () => {
+  it("keeps self-host rendering disabled even with configured providers", async () => {
     // A legacy Wrangler install runs cloudflare_access with no browser.
     vi.stubEnv("AUTH_MODE", "cloudflare_access");
     expect(await isAuditRenderingAllowed()).toBe(false);
     vi.stubEnv("CONTEXT_API_KEY", "context-test-key");
-    expect(await isAuditRenderingAllowed()).toBe(true);
+    expect(await isAuditRenderingAllowed()).toBe(false);
     // An Alchemy preview runs local_noauth with a browser.
     vi.stubEnv("CONTEXT_API_KEY", "");
     vi.stubEnv("AUTH_MODE", "local_noauth");
     vi.stubEnv("AUDIT_BROWSER_RENDERING", "true");
-    expect(await isAuditRenderingAllowed()).toBe(true);
+    expect(await isAuditRenderingAllowed()).toBe(false);
   });
 });

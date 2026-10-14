@@ -179,14 +179,13 @@ function mockDataforseoResult(costUsd: number) {
 }
 
 describe("meterDataforseoCall", () => {
-  it("skips billing in non-hosted mode", async () => {
+  it("refuses non-hosted research before a provider or billing call", async () => {
     isHostedServerAuthModeMock.mockResolvedValue(false);
-    mockDataforseoResult(RAW_COST);
-
     const client = createDataforseoClient(billingCustomer);
-    const result = await client.backlinks.summary(backlinksInput);
-
-    expect(result).toEqual({ rank: 42 });
+    await expect(client.backlinks.summary(backlinksInput)).rejects.toThrow(
+      "Paid research is disabled",
+    );
+    expect(fetchBacklinksSummary).not.toHaveBeenCalled();
     expect(checkMock).not.toHaveBeenCalled();
     expect(finalizeMock).not.toHaveBeenCalled();
   });

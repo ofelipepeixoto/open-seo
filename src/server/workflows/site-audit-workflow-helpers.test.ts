@@ -3,6 +3,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createCrawlThrottle } from "@/server/lib/audit/crawl-throttle";
 import { crawlPage } from "@/server/workflows/site-audit-workflow-helpers";
 
+// These cases exercise throttling/parsing; real DNS admission has separate tests.
+vi.mock("@/server/lib/audit/url-policy", () => ({
+  normalizeAndValidateStartUrl: async (url: string) => url,
+}));
+
 const PAGE_URL = "https://example.com/page";
 const PAGE_HTML =
   "<html><head><title>A page</title></head><body><h1>A page</h1></body></html>";
@@ -209,7 +214,8 @@ describe("crawlPage", () => {
           import { crawlPage } from ${JSON.stringify(new URL("./site-audit-workflow-helpers.ts", import.meta.url).href)};
           import { createCrawlThrottle } from ${JSON.stringify(new URL("../lib/audit/crawl-throttle.ts", import.meta.url).href)};
           const throttle = createCrawlThrottle(Date.now() + 90_000);
-          globalThis.fetch = async () => {
+          globalThis.fetch = async (input) => {
+            if (String(input).includes("dns-query")) return Response.json({ Status: 0, Answer: [{ type: 1, data: "93.184.216.34" }] });
             const html = '<title>Example memory regression 🌱</title>' +
               '<meta name="description" content="A small description">' +
               '<script>' + 'x'.repeat(1024 * 1024) + '</script>';

@@ -13,9 +13,8 @@ import {
 
 // Reports read path for the app. The `projectId` field in each validator is
 // what triggers project authorization (ADR 0001); the service never authorizes.
-// The stored `html` is deliberately unreachable from here — the /r/<id> render
-// route is its only reader, so no server function can pull documents into the
-// app worker's heap.
+// Lists remain metadata-only. The explicit review endpoint reads one bounded
+// document so approval can refer to exactly what the member inspected.
 
 const listReportsSchema = z.object({
   projectId: z.string().min(1),
@@ -96,22 +95,38 @@ export const getReport = createServerFn({ method: "POST" })
     return withNames;
   });
 
-/**
- * Mints (or returns) the report's public link. The token alone comes back —
- * the app builds `<origin>/s/<token>` client-side, so the same server works on
- * app.openseo.so and a self-hosted hostname without knowing either.
- */
-export const shareReport = createServerFn({ method: "POST" })
+/** Return the exact content being reviewed, through the project-authorized session. */
+export const getShareReview = createServerFn({ method: "POST" })
   .middleware(requireProjectContext)
   .validator(reportRefSchema)
+  .handler(async ({ data, context }) =>
+    ReportService.getShareReview(context.projectId, data.reportId),
+  );
+
+export const shareReport = createServerFn({ method: "POST" })
+  .middleware(requireProjectContext)
+  .validator(
+    reportRefSchema.extend({
+      revision: z.number().int().positive(),
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/),
+    }),
+  )
   .handler(async ({ data, context }) => {
     const report = await ReportService.shareReport({
+      source: "app",
+      review: { revision: data.revision, contentHash: data.contentHash },
       projectId: context.projectId,
       reportId: data.reportId,
       userId: context.userId,
       organizationId: context.organizationId,
     });
-    return { shareToken: report.shareToken, sharedAt: report.sharedAt };
+    return {
+      shareToken: report.shareToken,
+      sharedAt: report.sharedAt,
+      revision: report.revision,
+      approvedContentHash: report.approvedContentHash,
+      approvedByUserId: report.approvedByUserId,
+    };
   });
 
 export const unshareReport = createServerFn({ method: "POST" })
@@ -124,7 +139,13 @@ export const unshareReport = createServerFn({ method: "POST" })
       userId: context.userId,
       organizationId: context.organizationId,
     });
-    return { shareToken: report.shareToken, sharedAt: report.sharedAt };
+    return {
+      shareToken: report.shareToken,
+      sharedAt: report.sharedAt,
+      revision: report.revision,
+      approvedContentHash: report.approvedContentHash,
+      approvedByUserId: report.approvedByUserId,
+    };
   });
 
 export const deleteReport = createServerFn({ method: "POST" })

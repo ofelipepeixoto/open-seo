@@ -1,4 +1,4 @@
-import { and, count, desc, eq, isNull, sum } from "drizzle-orm";
+import { and, count, desc, eq, isNull, isNotNull, sql, sum } from "drizzle-orm";
 import { db } from "@/db";
 import { projects, reports } from "@/db/schema";
 import type { ReportMetadata } from "@/types/schemas/reports";
@@ -22,6 +22,9 @@ const metadataColumns = {
   sizeBytes: reports.sizeBytes,
   shareToken: reports.shareToken,
   sharedAt: reports.sharedAt,
+  revision: reports.revision,
+  approvedContentHash: reports.approvedContentHash,
+  approvedByUserId: reports.approvedByUserId,
   createdAt: reports.createdAt,
   updatedAt: reports.updatedAt,
 };
@@ -166,6 +169,11 @@ async function updateReportContent(params: {
   await db
     .update(reports)
     .set({
+      revision: sql`${reports.revision} + 1`,
+      shareToken: null,
+      sharedAt: null,
+      approvedContentHash: null,
+      approvedByUserId: null,
       title: params.title,
       summary: params.summary,
       html: params.html,
@@ -196,6 +204,7 @@ async function getSharedReportByToken(token: string): Promise<{
   skill: string | null;
   updatedAt: string;
   archived: boolean;
+  html: string;
 } | null> {
   const [row] = await db
     .select({
@@ -208,10 +217,17 @@ async function getSharedReportByToken(token: string): Promise<{
       skill: reports.skill,
       updatedAt: reports.updatedAt,
       archivedAt: projects.archivedAt,
+      html: reports.html,
     })
     .from(reports)
     .innerJoin(projects, eq(projects.id, reports.projectId))
-    .where(eq(reports.shareToken, token))
+    .where(
+      and(
+        eq(reports.shareToken, token),
+        isNotNull(reports.approvedContentHash),
+        isNotNull(reports.approvedByUserId),
+      ),
+    )
     .limit(1);
   if (!row) return null;
   const { archivedAt, ...report } = row;
@@ -226,13 +242,23 @@ async function setShareToken(
   reportId: string,
   // The service mints both halves, so the token it hands back to the caller
   // and the stamp stored with it come from one clock.
-  share: { shareToken: string; sharedAt: string } | null,
+  share: {
+    shareToken: string;
+    sharedAt: string;
+    revision: number;
+    approvedContentHash: string;
+    approvedByUserId: string;
+  } | null,
 ): Promise<boolean> {
   const updated = await db
     .update(reports)
     .set({
       shareToken: share?.shareToken ?? null,
       sharedAt: share?.sharedAt ?? null,
+      approvedContentHash: share?.approvedContentHash ?? null,
+      approvedByUserId: share?.approvedByUserId ?? null,
+      // Revocation invalidates any outstanding review, including when private.
+      revision: share ? reports.revision : sql`${reports.revision} + 1`,
     })
     .where(
       and(
@@ -241,6 +267,7 @@ async function setShareToken(
         // Concurrent publishers must keep the first token. Revocation clears
         // whichever token is current when the update runs.
         share ? isNull(reports.shareToken) : undefined,
+        share ? eq(reports.revision, share.revision) : undefined,
       ),
     )
     .returning({ id: reports.id });

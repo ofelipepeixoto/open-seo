@@ -65,6 +65,9 @@ export type ReportMetadata = {
   shareToken: string | null;
   /** When the current share token was minted, or null when not shared. */
   sharedAt: string | null;
+  revision: number;
+  approvedContentHash: string | null;
+  approvedByUserId: string | null;
   createdAt: string;
   updatedAt: string;
 };

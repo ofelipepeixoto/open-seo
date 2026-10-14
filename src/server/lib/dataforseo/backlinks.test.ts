@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/server/lib/runtime-env", () => ({
+  isHostedServerAuthMode: async () => true,
   getRequiredEnvValue: vi.fn(async () => "test-api-key"),
 }));
 

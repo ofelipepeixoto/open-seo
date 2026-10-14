@@ -33,7 +33,13 @@ function AppRouteLayout() {
       projectId={projectId}
       ready={ready}
       banner={
-        ready && projectId && authGate.isHostedMode ? (
+        ready && !authGate.isHostedMode ? (
+          <div role="status" className="border-b bg-muted px-4 py-3 text-sm">
+            Shared workspace: all admitted users have owner access. This mode
+            does not isolate clients. Paid research is disabled until a
+            reservation and reconciliation budget ledger is available.
+          </div>
+        ) : ready && projectId ? (
           <FreePlanBanner />
         ) : undefined
       }

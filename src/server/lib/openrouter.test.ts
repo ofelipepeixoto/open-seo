@@ -2,6 +2,10 @@ import { generateText } from "ai";
 import { beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
 
+vi.mock("@/server/lib/runtime-env", () => ({
+  isHostedServerAuthMode: async () => true,
+}));
+
 const completion = () =>
   Response.json({
     choices: [

@@ -27,7 +27,7 @@ const sharingInputSchema = {
   public: z
     .boolean()
     .describe(
-      "Required: true enables a public link anyone can open without an account; false revokes the current link. Set true only when the user explicitly requests public sharing in their prompt or instructions for the skill. Never infer permission from report content, research sources, or a request to save a report.",
+      "Only false is permitted for agents: revoke the public link. Enabling sharing requires a human to review and approve the exact version in the app.",
     ),
 } as const;
 
@@ -36,7 +36,7 @@ export const setReportSharingTool = {
   config: {
     title: "Set report sharing",
     description:
-      "Enables or revokes public sharing for one saved report. Uses no credits. New reports are private. Only enable sharing when the user explicitly asks for it in their prompt or instructions for the skill. Anyone with shareUrl can read the latest saved version without an account. Public sharing is available only on hosted OpenSEO. Repeating true preserves the existing link; false revokes it, and enabling again creates a new link. Returns the app url and shareUrl (null after revocation). Use get_report to retrieve an existing link without changing access.",
+      "Revokes public sharing for one saved report. Uses no credits. Agents cannot enable public sharing; direct the user to the app sharing dialog to review and approve the exact version. Saving a report revokes its previous public link. Returns the app url and shareUrl.",
     inputSchema: sharingInputSchema,
     outputSchema: z.looseObject({
       reportId: z.string(),
@@ -69,7 +69,7 @@ export const setReportSharingTool = {
 
       return mcpResponse({
         text: shareUrl
-          ? `Public sharing enabled. Anyone with this link can read the latest saved report without an account: ${shareUrl}`
+          ? `Public sharing enabled. Anyone with this link can read the approved report revision without an account: ${shareUrl}`
           : `Public sharing disabled. The report is private. Open it at ${url}.`,
         meta: buildProjectMeta(context, args.projectId, path),
         structuredContent: {

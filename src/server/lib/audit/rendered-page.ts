@@ -1,3 +1,4 @@
+import { requirePaidProviderBudget } from "@/server/billing/paid-provider-policy";
 import { z } from "zod";
 import type {
   BrowserRun,
@@ -9,7 +10,7 @@ import {
 } from "@/shared/audit-rendering";
 import { classifyFetch } from "./classify-fetch";
 import { MAX_HTML_BYTES, readTextUpTo, truncateToBytes } from "./html-response";
-import { isCrawlableUrl } from "./url-policy";
+import { isCrawlableUrl, normalizeAndValidateStartUrl } from "./url-policy";
 import { normalizeUrl } from "./url-utils";
 
 type RenderOptions = {
@@ -169,6 +170,9 @@ async function renderPage(
   if (!isCrawlableUrl(url) || new URL(url).username || new URL(url).password) {
     throw new Error("Invalid rendering target");
   }
+
+  await normalizeAndValidateStartUrl(url);
+  await requirePaidProviderBudget();
 
   if (options.browser) {
     const page = await renderWithCloudflare(url, options.browser);
